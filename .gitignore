@@ -1,5 +1,8 @@
 /vendor
 /.idea
+/prompts
+/tests_old
 composer.lock
 index.php
 .phpunit.result.cache
+index_old.php

@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace Cocoon\Control\Features;
 
@@ -8,53 +9,186 @@ namespace Cocoon\Control\Features;
 trait UploadFile
 {
     /**
-     * Verifie si il y a un fichier
-     *
-     * @param string $value
-     * @param array $args
-     * @param string $field
-     * @return boolean
+     * Types MIME autorisés par extension
      */
-    protected function ruleRequiredFile($value, $args, $field) :bool
-    {
-        return !empty($this->file($field)['name']);
-    }
+    private array $allowedMimeTypes = [
+        'jpg' => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png' => ['image/png'],
+        'gif' => ['image/gif'],
+        'pdf' => ['application/pdf'],
+        'doc' => ['application/msword'],
+        'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        'xls' => ['application/vnd.ms-excel'],
+        'xlsx' => ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        'zip' => ['application/zip'],
+        'rar' => ['application/x-rar-compressed']
+    ];
+
     /**
-     * Verifit la taille di fichier
+     * Vérifie si un fichier a été uploadé
      *
-     * @param string $value
+     * @param mixed $value
      * @param array $args
      * @param string $field
-     * @return boolean
+     * @return bool
      */
-    protected function ruleSize($value, $args, $field) :bool
+    protected function ruleRequiredFile(mixed $value, array $args, string $field): bool
     {
-        // size par defaut en octets = 2mo
-        $size = $args[0] ?? '2000000';
-        $filezize = $this->file($field)['size'];
-        return $filezize <= $size;
+        if (!isset($_FILES[$field])) {
+            return false;
+        }
+
+        return !empty($_FILES[$field]['name']) && $_FILES[$field]['error'] !== UPLOAD_ERR_NO_FILE;
     }
+
     /**
-     * Verifie si le type de fichier est autorisé
+     * Vérifie la taille du fichier
      *
-     * @param string $value
+     * @param mixed $value
      * @param array $args
      * @param string $field
-     * @return boolean
+     * @return bool
      */
-    protected function ruleType($value, $args, $field) :bool
+    protected function ruleSize(mixed $value, array $args, string $field): bool
     {
-        $ext = strtolower(explode('.', $this->file($field)['name'])[1]);
-        return in_array($ext, $args) !== false;
+        if (!isset($_FILES[$field])) {
+            return false;
+        }
+
+        // Conversion de la taille en octets (ex: 2M, 500K, 1G)
+        $size = $this->convertSizeToBytes($args[0] ?? '2M');
+        return $_FILES[$field]['size'] <= $size;
     }
+
+    /**
+     * Vérifie le type MIME du fichier
+     *
+     * @param mixed $value
+     * @param array $args
+     * @param string $field
+     * @return bool
+     */
+    protected function ruleMimes(mixed $value, array $args, string $field): bool
+    {
+        if (!isset($_FILES[$field])) {
+            return false;
+        }
+
+        $file = $_FILES[$field];
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+
+        // Vérification de l'extension
+        $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        if (!isset($this->allowedMimeTypes[$extension])) {
+            return false;
+        }
+
+        // Vérification du type MIME
+        return in_array($mimeType, $this->allowedMimeTypes[$extension], true);
+    }
+
+    /**
+     * Vérifie les dimensions d'une image
+     *
+     * @param mixed $value
+     * @param array $args
+     * @param string $field
+     * @return bool
+     */
+    protected function ruleDimensions(mixed $value, array $args, string $field): bool
+    {
+        if (!isset($_FILES[$field])) {
+            return false;
+        }
+
+        $file = $_FILES[$field];
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+
+        // Vérifie si c'est une image
+        if (!str_starts_with($mimeType, 'image/')) {
+            return false;
+        }
+
+        $imageInfo = getimagesize($file['tmp_name']);
+        if ($imageInfo === false) {
+            return false;
+        }
+
+        [$width, $height] = $imageInfo;
+
+        // Vérifie les dimensions minimales
+        if (isset($args[0]) && $width < $args[0]) {
+            return false;
+        }
+        if (isset($args[1]) && $height < $args[1]) {
+            return false;
+        }
+
+        // Vérifie les dimensions maximales
+        if (isset($args[2]) && $width > $args[2]) {
+            return false;
+        }
+        if (isset($args[3]) && $height > $args[3]) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Vérifie si le fichier est une image
+     *
+     * @param mixed $value
+     * @param array $args
+     * @param string $field
+     * @return bool
+     */
+    protected function ruleImage(mixed $value, array $args, string $field): bool
+    {
+        if (!isset($_FILES[$field])) {
+            return false;
+        }
+
+        $file = $_FILES[$field];
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+
+        return str_starts_with($mimeType, 'image/');
+    }
+
+    /**
+     * Convertit une taille en octets
+     *
+     * @param string $size
+     * @return int
+     */
+    private function convertSizeToBytes(string $size): int
+    {
+        $unit = strtolower(substr($size, -1));
+        $size = (int)substr($size, 0, -1);
+
+        return match ($unit) {
+            'g' => $size * 1024 * 1024 * 1024,
+            'm' => $size * 1024 * 1024,
+            'k' => $size * 1024,
+            default => $size
+        };
+    }
+
     /**
      * Pour retourner les infos sur les fichiers
      *
      * @param string $key
-     * @return void
+     * @return array|null
      */
-    protected function file($key)
+    protected function file(string $key): ?array
     {
-        return $_FILES[$key];
+        return $_FILES[$key] ?? null;
     }
 }

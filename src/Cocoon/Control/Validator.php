@@ -1,137 +1,171 @@
 <?php
+declare(strict_types=1);
 
 namespace Cocoon\Control;
 
 use Closure;
+use Attribute;
 use Cocoon\Control\Features\Rules;
 use Cocoon\Control\Features\UploadFile;
+use Cocoon\Control\Exceptions\ValidationException;
+use Cocoon\Control\Exceptions\RuleNotFoundException;
+use Cocoon\Control\Exceptions\LanguageFileNotFoundException;
 
 /**
  * Classe gérant la validation des données
+ * 
+ * Cette classe permet de valider des données selon des règles prédéfinies
+ * ou personnalisées, avec support multilingue des messages d'erreur.
  */
+#[Attribute(Attribute::TARGET_CLASS)]
 class Validator
 {
+    use Rules, UploadFile;
+
     /**
-     * Liste des messagges par defaut (classé par langue) ex fr.php
-     *
-     * @var array
+     * Cache des règles compilées
      */
-    private $langMessages;
+    private array $compiledRules = [];
+
     /**
-     * Données a valider
-     *
-     * @var array
+     * Cache des messages d'erreur formatés
      */
-    private $data;
+    private array $errorCache = [];
+
     /**
-     * Messsages d'erreur par règle
-     *
-     * @var array
+     * Liste des messages par défaut (classé par langue) ex fr.php
      */
-    private $messagesErrors = [];
+    private array $langMessages = [];
+
     /**
-     * Personalisation des messages d'erreur par règle
-     *
-     * @var array
+     * Données à valider
      */
-    private $aliasMessageRuleError = [];
+    private array $data = [];
+
     /**
-     * Personalisation des messages d'erreur par champs et règle
-     *
-     * @var array
+     * Messages d'erreur par règle
      */
-    public $aliasMessageFieldRuleError = [];
+    private array $messagesErrors = [];
+
     /**
-     * Listes des messages d'erreur retournées.
-     *
-     * @var array
+     * Personnalisation des messages d'erreur par règle
      */
-    private $errors = [];
+    private array $aliasMessageRuleError = [];
+
+    /**
+     * Personnalisation des messages d'erreur par champs et règle
+     */
+    public array $aliasMessageFieldRuleError = [];
+
+    /**
+     * Listes des messages d'erreur retournées
+     */
+    private array $errors = [];
+
     /**
      * Liste des alias pour les champs
-     *
-     * @var array
      */
-    private $alias = [];
+    private array $alias = [];
+
     /**
      * Liste des règles ajoutées
-     *
-     * @var array
      */
-    private $rules = [];
+    private array $rules = [];
 
-    use Rules, UploadFile;
     /**
-     * Contructeur de la classe
-     *
-     * @param string $lang la langue des messages
+     * Langue des messages
      */
-    public function __construct($lang = 'fr')
-    {
-        $DS = DIRECTORY_SEPARATOR;
-        $this->langMessages = require __DIR__ . $DS . 'messages' . $DS . $lang . '.php';
-        $this->data = array_merge($_POST, $_FILES);
-    }
+    private string $lang;
+
     /**
-     * Les données à valider
+     * Constructeur de la classe
      *
-     * @param array $data
+     * @param string $lang La langue des messages (par défaut 'fr')
+     * @throws LanguageFileNotFoundException Si le fichier de langue n'existe pas
+     */
+    public function __construct(string $lang = 'fr')
+    {
+        $this->lang = $lang;
+        $DS = DIRECTORY_SEPARATOR;
+        $langFile = __DIR__ . $DS . 'messages' . $DS . $lang . '.php';
+        
+        if (!file_exists($langFile)) {
+            throw new LanguageFileNotFoundException($langFile);
+        }
+        
+        $this->langMessages = require $langFile;
+        $this->data = [];
+    }
+
+    /**
+     * Définit les données à valider
+     *
+     * @param array $data Les données à valider
      * @return self
      */
-    public function data($data) :self
+    public function data(array $data): self
     {
         $this->data = $data;
+        $this->errorCache = []; // Réinitialise le cache des erreurs
         return $this;
     }
+
     /**
-     * Ajouter une règle.
+     * Ajoute une règle personnalisée
      *
-     * @param string $ruleName
-     * @param Closure $callback
-     * @param string $message
+     * @param string $ruleName Nom de la règle
+     * @param Closure $callback Fonction de validation
+     * @param string $message Message d'erreur personnalisé
      * @return self
      */
-    public function addRule($ruleName, Closure $callback, $message) : self
+    public function addRule(string $ruleName, Closure $callback, string $message): self
     {
         $this->rules[$ruleName] = $callback;
         $this->aliasMessageRuleError[$ruleName] = $message;
         return $this;
     }
+
     /**
-     * Ajouter plusieurs règles
+     * Ajoute plusieurs règles
      *
-     * @param array $rules
+     * @param array<array{name: string, callback: Closure, message: string}> $rules Liste des règles à ajouter
      * @return self
      */
-    public function addRules($rules = []) :self
+    public function addRules(array $rules = []): self
     {
         foreach ($rules as $value) {
             $this->addRule($value['name'], $value['callback'], $value['message']);
         }
         return $this;
     }
+
     /**
      * Redéfinit tous les messages par défaut
      * (nécessaire pour un autre language.)
      *
-     * @param string $langFilePath un fichier retournant un tableau
+     * @param string $langFilePath Chemin vers le fichier de langue
      * @return self
+     * @throws LanguageFileNotFoundException Si le fichier de langue n'existe pas
      */
-    public function setLangFile($langFilePath) :self
+    public function setLangFile(string $langFilePath): self
     {
-        if (file_exists($langFilePath)) {
-            require $langFilePath;
+        if (!file_exists($langFilePath)) {
+            throw new LanguageFileNotFoundException($langFilePath);
         }
+        
+        $this->langMessages = require $langFilePath;
         return $this;
     }
+
     /**
      * Validation des données
      *
-     * @param array $rules listes des règles pour les données a valider
-     * @param array $messages Listes des messages personnalisés.
+     * @param array<string, string> $rules Listes des règles pour les données à valider
+     * @param array<string, string> $messages Listes des messages personnalisés
      * @return self
+     * @throws ValidationException Si la validation échoue
      */
-    public function validate($rules, $messages = []) :self
+    public function validate(array $rules, array $messages = []): self
     {
         if (!empty($messages)) {
             $this->addMessages($messages);
@@ -141,104 +175,124 @@ class Validator
         $rules = $this->aliased($rules);
         $validate = [];
 
+        // Compile les règles si nécessaire
         foreach ($rules as $key => $value) {
-            $validate[$key] = $this->data[$key];
+            if (!isset($this->compiledRules[$key])) {
+                $this->compiledRules[$key] = array_map(
+                    fn($rule) => ['rule' => $this->getRule($rule), 'args' => $this->getArgs($rule)],
+                    explode('|', $value)
+                );
+            }
+            $validate[$key] = $this->data[$key] ?? null;
         }
 
         foreach ($validate as $key => $value) {
-            $fieldsVerify = explode('|', $rules[$key]);
-            foreach ($fieldsVerify as $rule) {
-                $passes = $this->verify($key, $value, $this->getRule($rule), $this->getArgs($rule));
-                // la validation est stoppé quand une règle a échoué.
+            foreach ($this->compiledRules[$key] as $rule) {
+                $passes = $this->verify($key, $value, $rule['rule'], $rule['args']);
                 if (!$passes) {
                     break;
                 }
             }
         }
+
+        if ($this->fails()) {
+            throw new ValidationException($this->errors);
+        }
+
         return $this;
     }
+
     /**
-     * Vérifie si il y a des messages d'erreur.
+     * Vérifie s'il y a des messages d'erreur
      *
      * @return bool
      */
-    public function fails() : bool
+    public function fails(): bool
     {
         return !empty($this->errors);
     }
+
     /**
-     * Retourne les messages d'erreurs.
+     * Retourne les messages d'erreurs
      *
-     * @return object instance de Messages::class
+     * @return Messages Instance de Messages::class
      */
-    public function errors()
+    public function errors(): Messages
     {
         return new Messages($this->errors);
     }
+
     /**
-     * Définit des messages personnalisés.
+     * Définit des messages personnalisés
      *
-     * @param array $messages
+     * @param array<string, string> $messages Messages personnalisés
      * @return self
      */
-    public function addMessages($messages = []) : self
+    public function addMessages(array $messages = []): self
     {
         foreach ($messages as $key => $value) {
-            if (strpos($key, '.')) {
-                $this->aliasMessageFieldRuleError[$key] = $value;
-            } else {
-                $this->aliasMessageRuleError[$key] = $value;
-            }
+            $this->aliasMessageFieldRuleError[$key] = $value;
         }
         return $this;
     }
+
     /**
-     * Vérification des règles pour une donnée
+     * Vérifie une règle de validation
      *
-     * @param string $field
-     * @param string $value
-     * @param string $rule
-     * @param array $args
+     * @param string $field Nom du champ
+     * @param mixed $value Valeur à valider
+     * @param string $rule Nom de la règle
+     * @param array $args Arguments de la règle
      * @return bool
+     * @throws RuleNotFoundException Si la règle n'existe pas
      */
-    protected function verify($field, $value, $rule, $args) : bool
+    protected function verify(string $field, mixed $value, string $rule, array $args): bool
     {
         $methodRule = $this->rules[$rule] ?? [$this, 'rule' . $this->camelRule($rule)];
+        
+        if (!is_callable($methodRule)) {
+            throw new RuleNotFoundException($rule);
+        }
+        
         $control = call_user_func_array($methodRule, [$value, $args, $field]);
+        
         if (!$control) {
             $original = $field;
             $aliasField = $this->alias[$field] ?? $field;
             $this->errors[$field] = $this->formatError($original, $aliasField, $value, $rule, $args);
         }
+        
         return $control;
     }
+
     /**
-     * Résolution du nom d'une règle.
+     * Résout le nom d'une règle
      *
-     * @param string $rule
+     * @param string $rule Règle à résoudre
      * @return string
      */
-    protected function getRule($rule) : string
+    protected function getRule(string $rule): string
     {
-        if (strpos($rule, ':')) {
+        if (str_contains($rule, ':')) {
             $result = explode(':', $rule);
             return trim($result[0]);
         }
         return $rule;
     }
+
     /**
-     * Résolution des arguments définient pour une règle
+     * Résout les arguments définis pour une règle
      *
-     * @param string $args
+     * @param string $args Arguments à résoudre
      * @return array
      */
-    protected function getArgs($args) : array
+    protected function getArgs(string $args): array
     {
         $arguments = [];
-        if (strpos($args, ':')) {
+        if (str_contains($args, ':')) {
             $result = explode(':', $args);
             $resolve = end($result);
-            if (strpos($resolve, ',')) {
+            if (str_contains($resolve, ',')) {
                 $arguments = explode(',', $resolve);
             } else {
                 $arguments[] = $resolve;
@@ -246,41 +300,53 @@ class Validator
         }
         return $arguments;
     }
+
     /**
-     * Format les messages d'erreur
+     * Formate les messages d'erreur
      *
-     * @param string $original
-     * @param string $field
-     * @param string|array $value
-     * @param string $rule
-     * @param array $args
-     * @return string Message d'erreur
+     * @param string $original Nom original du champ
+     * @param string $field Nom du champ (avec alias)
+     * @param mixed $value Valeur du champ
+     * @param string $rule Nom de la règle
+     * @param array $args Arguments de la règle
+     * @return string Message d'erreur formaté
      */
-    protected function formatError($original, $field, $value, $rule, $args = []) : string
+    protected function formatError(string $original, string $field, mixed $value, string $rule, array $args = []): string
     {
+        $cacheKey = "{$original}.{$rule}." . implode(',', $args);
+        
+        if (isset($this->errorCache[$cacheKey])) {
+            return $this->errorCache[$cacheKey];
+        }
+
         $search = ['{field}', '{value}'];
         $value = (is_array($value)) ? $value['name'] : $value;
         $replace = [$field, $value];
+        
         if (!empty($args)) {
             $key = array_keys($args);
-            $keys = array_map(function ($key) {
-                return '{$arg' . $key . '}';
-            }, $key);
+            $keys = array_map(fn($key) => '{$arg' . $key . '}', $key);
             $search = array_merge($search, $keys);
             $replace = array_merge($replace, $args);
         }
+        
         $message = $this->aliasMessageFieldRuleError[$original . '.' . $rule] ??
             $this->aliasMessageRuleError[$rule] ??
             $this->messagesErrors[$rule];
-        return str_replace($search, $replace, $message);
+            
+        $formatted = str_replace($search, $replace, $message);
+        $this->errorCache[$cacheKey] = $formatted;
+        
+        return $formatted;
     }
+
     /**
-     * Résolution des alias donnée au champs
+     * Résout les alias donnés aux champs
      *
-     * @param array $data
-     * @return array
+     * @param array<string, string> $data Données avec alias
+     * @return array<string, string>
      */
-    protected function aliased($data) :array
+    protected function aliased(array $data): array
     {
         foreach ($data as $key => $value) {
             $aliasing = explode(' as ', $key);
@@ -294,14 +360,15 @@ class Validator
         }
         return $data;
     }
+
     /**
-     * Camelcase pour les règles
+     * Convertit une règle en camelCase
      *
-     * @param string $rule
+     * @param string $rule Règle à convertir
      * @return string
      */
-    protected function camelRule($rule) :string
+    protected function camelRule(string $rule): string
     {
-        return str_replace('_', '', ucwords($rule, '_'));
+        return str_replace(' ', '', ucwords(str_replace('_', ' ', $rule)));
     }
 }
