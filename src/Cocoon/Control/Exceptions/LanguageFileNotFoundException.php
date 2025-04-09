@@ -27,4 +27,4 @@ class LanguageFileNotFoundException extends ValidationException
             $previous
         );
     }
-} 
+}

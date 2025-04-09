@@ -13,7 +13,7 @@ use Cocoon\Control\Exceptions\LanguageFileNotFoundException;
 
 /**
  * Classe gérant la validation des données
- * 
+ *
  * Cette classe permet de valider des données selon des règles prédéfinies
  * ou personnalisées, avec support multilingue des messages d'erreur.
  */
@@ -88,11 +88,11 @@ class Validator
         $this->lang = $lang;
         $DS = DIRECTORY_SEPARATOR;
         $langFile = __DIR__ . $DS . 'messages' . $DS . $lang . '.php';
-        
+
         if (!file_exists($langFile)) {
             throw new LanguageFileNotFoundException($langFile);
         }
-        
+
         $this->langMessages = require $langFile;
         $this->data = [];
     }
@@ -152,7 +152,7 @@ class Validator
         if (!file_exists($langFilePath)) {
             throw new LanguageFileNotFoundException($langFilePath);
         }
-        
+
         $this->langMessages = require $langFilePath;
         return $this;
     }
@@ -249,19 +249,19 @@ class Validator
     protected function verify(string $field, mixed $value, string $rule, array $args): bool
     {
         $methodRule = $this->rules[$rule] ?? [$this, 'rule' . $this->camelRule($rule)];
-        
+
         if (!is_callable($methodRule)) {
             throw new RuleNotFoundException($rule);
         }
-        
+
         $control = call_user_func_array($methodRule, [$value, $args, $field]);
-        
+
         if (!$control) {
             $original = $field;
             $aliasField = $this->alias[$field] ?? $field;
             $this->errors[$field] = $this->formatError($original, $aliasField, $value, $rule, $args);
         }
-        
+
         return $control;
     }
 
@@ -311,10 +311,15 @@ class Validator
      * @param array $args Arguments de la règle
      * @return string Message d'erreur formaté
      */
-    protected function formatError(string $original, string $field, mixed $value, string $rule, array $args = []): string
-    {
+    protected function formatError(
+        string $original,
+        string $field,
+        mixed $value,
+        string $rule,
+        array $args = []
+    ): string {
         $cacheKey = "{$original}.{$rule}." . implode(',', $args);
-        
+
         if (isset($this->errorCache[$cacheKey])) {
             return $this->errorCache[$cacheKey];
         }
@@ -322,21 +327,21 @@ class Validator
         $search = ['{field}', '{value}'];
         $value = (is_array($value)) ? $value['name'] : $value;
         $replace = [$field, $value];
-        
+
         if (!empty($args)) {
             $key = array_keys($args);
             $keys = array_map(fn($key) => '{$arg' . $key . '}', $key);
             $search = array_merge($search, $keys);
             $replace = array_merge($replace, $args);
         }
-        
+
         $message = $this->aliasMessageFieldRuleError[$original . '.' . $rule] ??
             $this->aliasMessageRuleError[$rule] ??
             $this->messagesErrors[$rule];
-            
+
         $formatted = str_replace($search, $replace, $message);
         $this->errorCache[$cacheKey] = $formatted;
-        
+
         return $formatted;
     }
 

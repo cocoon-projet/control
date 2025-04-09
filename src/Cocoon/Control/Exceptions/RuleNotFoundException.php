@@ -27,4 +27,4 @@ class RuleNotFoundException extends ValidationException
             $previous
         );
     }
-} 
+}
